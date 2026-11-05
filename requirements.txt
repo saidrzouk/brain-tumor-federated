@@ -1,0 +1,22 @@
+# Data and image processing
+numpy
+pandas
+Pillow
+scikit-learn
+matplotlib
+
+# Deep learning
+torch
+torchvision
+
+# Federated learning
+flwr
+
+# Web application
+gradio
+
+# Dataset download
+kaggle
+
+# Testing
+pytest

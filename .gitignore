@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Dataset and generated model artifacts
+data/raw/*
+!data/raw/*/
+!data/raw/*/.keep
+model/saved_models/*
+!model/saved_models/.keep
+experiments/results/*.csv
+experiments/results/plots/*
+!experiments/results/plots/.keep
+
+# Reports generated locally
+report/*.pdf
+
+# IDE and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
