@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+.env
+
+# Test and tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Raw data and generated artifacts
+data/raw/*
+!data/raw/*/
+!data/raw/*/.gitkeep
+model/saved_models/*
+!model/saved_models/.gitkeep
+experiments/results/*
+!experiments/results/.gitkeep
+!experiments/results/plots/
+experiments/results/plots/*
+!experiments/results/plots/.gitkeep
+report/*.pdf
+*.pth
+*.pt
+*.h5
+
+# Credentials and OS files
+kaggle.json
+.DS_Store
+Thumbs.db
+
