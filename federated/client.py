@@ -30,6 +30,7 @@ from model.vgg16_model import BrainTumorVGG16
 
 # Import s-sahiḥ mn data/split_data.py (kansta3mlo get_client_data w get_dataloaders)
 from data.split_data import get_client_data, get_dataloaders
+from federated.flower_config import BATCH_SIZE, SERVER_ADDRESS,LEARNING_RATE
 
 class BrainTumorClient(fl.client.NumPyClient):
     def __init__(self, model, train_loader, val_loader, test_loader, num_classes=4):
@@ -58,7 +59,7 @@ class BrainTumorClient(fl.client.NumPyClient):
             self.set_parameters(parameters)
             self.model.train()
             criterion = nn.CrossEntropyLoss()
-            optimizer = optim.Adam(filter(lambda p: p.requires_grad, self.model.parameters()), lr=0.0001)
+            optimizer = optim.Adam(filter(lambda p: p.requires_grad, self.model.parameters()), lr=LEARNING_RATE)
 
             # Local training epochs
             for epoch in range(1):
@@ -119,7 +120,7 @@ def main():
     client_samples = get_client_data(client_id)
 
     # 3eytna l get_dataloaders bach t-creer lina train_loader, val_loader, w test_loader dyal had l-client
-    train_loader, val_loader, test_loader = get_dataloaders(batch_size=16, train_samples=client_samples)
+    train_loader, val_loader, test_loader = get_dataloaders(batch_size=BATCH_SIZE, train_samples=client_samples)
 
     # Initialisation d l-client dyalna
     client = BrainTumorClient(model, train_loader, val_loader, test_loader)
@@ -127,7 +128,7 @@ def main():
     try:
         print(f"Connecting client {client_id} to server at 127.0.0.1:8080...")
         fl.client.start_numpy_client(
-            server_address="127.0.0.1:8080",
+            server_address=SERVER_ADDRESS,
             client=client,
         )
     except Exception as e:

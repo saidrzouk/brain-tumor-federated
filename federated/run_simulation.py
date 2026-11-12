@@ -46,13 +46,11 @@ if project_path not in sys.path:
 from data.split_data import get_client_data, get_dataloaders
 from federated.client import BrainTumorClient
 from model.vgg16_model import BrainTumorVGG16
+from federated.flower_config import NUM_ROUNDS, NUM_CLIENTS, BATCH_SIZE
 
 # 1. Initialisation du Modèle Global
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 global_model = BrainTumorVGG16().to(device)
-
-NUM_ROUNDS = 10   # Configuré à 10 rounds selon le projet
-NUM_CLIENTS = 3
 
 print("Starting Manual Federated Learning Loop with Evaluation & 10 Rounds...\n")
 
@@ -70,7 +68,7 @@ for round_idx in range(NUM_ROUNDS):
     for client_id in range(1, NUM_CLIENTS + 1):
         print(f"  -> Training Client {client_id}...")
         client_samples = get_client_data(client_id)
-        train_loader, val_loader, test_loader = get_dataloaders(batch_size=16, train_samples=client_samples)
+        train_loader, val_loader, test_loader = get_dataloaders(batch_size=BATCH_SIZE, train_samples=client_samples)
 
         client_model = BrainTumorVGG16()
         client = BrainTumorClient(client_model, train_loader, val_loader, test_loader)
@@ -108,7 +106,7 @@ for round_idx in range(NUM_ROUNDS):
 
     for client_id in range(1, NUM_CLIENTS + 1):
         client_samples = get_client_data(client_id)
-        _, _, test_loader = get_dataloaders(batch_size=16, train_samples=client_samples)
+        _, _, test_loader = get_dataloaders(batch_size=BATCH_SIZE, train_samples=client_samples)
 
         client_model = BrainTumorVGG16()
         # On passe test_loader au client pour l'évaluation
