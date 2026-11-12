@@ -1,3 +1,13 @@
+"""
+Script d'évaluation centralisée (Brain Tumor MRI) :
+
+Rôle : Charge un modèle entraîné (par défaut le modèle centralisé) et calcule 
+toutes les métriques de performance sur l'ensemble de test :
+- Accuracy et Loss globale.
+- Précision, Recall, et F1-score (macro et par classe).
+- Matrice de confusion détaillée pour l'analyse des 4 classes de tumeurs.
+"""
+
 import argparse
 import os
 import sys
@@ -11,7 +21,7 @@ from sklearn.metrics import (accuracy_score, confusion_matrix,
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "data"))
 sys.path.insert(0, HERE)
-from split_data import get_dataloaders, CLASSES
+from data.split_data import get_dataloaders, CLASSES
 from vgg16_model import get_model
 
 
