@@ -14,101 +14,199 @@ Fonctionnement du client (`BrainTumorClient`) :
 5. Connexion réseau (`main`) : Lit la variable d'environnement `CLIENT_ID` et se connecte au serveur Flower via gRPC.
 """
 
-import os
-import sys
-import torch
 import gc
-import copy
+import os
+from collections import OrderedDict
 
-project_path = "/content/project/brain-tumor-federated"
-if project_path not in sys.path:
-    sys.path.append(project_path)
+import flwr as fl
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
 from data.split_data import get_client_data, get_dataloaders
-from federated.client import BrainTumorClient
+from federated.flower_config import (
+    BATCH_SIZE,
+    LEARNING_RATE,
+    LOCAL_EPOCHS,
+    SERVER_ADDRESS,
+)
 from model.vgg16_model import BrainTumorVGG16
 
-# 1. Initialisation du Modèle Global
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-global_model = BrainTumorVGG16().to(device)
 
-NUM_ROUNDS = 10   # Configuré à 10 rounds selon le projet
-NUM_CLIENTS = 3
+class BrainTumorClient(fl.client.NumPyClient):
+    def __init__(
+        self,
+        model,
+        train_loader,
+        val_loader=None,
+        test_loader=None,
+    ):
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
+        self.model = model.to(self.device)
+        self.train_loader = train_loader
+        self.val_loader = val_loader
+        self.test_loader = test_loader
 
-print("Starting Manual Federated Learning Loop with Evaluation & 10 Rounds...\n")
+        # Geler les couches convolutives — seuls les poids du classifieur
+        # sont échangés avec le serveur, ce qui réduit le coût de communication.
+        for param in self.model.features.parameters():
+            param.requires_grad = False
 
-for round_idx in range(NUM_ROUNDS):
-    print(f"\n--- [ROUND {round_idx + 1}/{NUM_ROUNDS}] ---")
-    
-    client_weights = []
-    client_lens = []
-    
-    # Récupérer les poids globaux actuels
-    global_state = copy.deepcopy(global_model.state_dict())
-    global_params = [val.cpu().numpy() for val in global_state.values()]
+        # AMP : accélère l'entraînement sur GPU et réduit l'utilisation VRAM.
+        # Utilise l'API non dépréciée (PyTorch >= 2.0).
+        self.use_amp = self.device.type == "cuda"
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
 
-    # 2. Entraînement local (Fit) sur chaque client
-    for client_id in range(1, NUM_CLIENTS + 1):
-        print(f"  -> Training Client {client_id}...")
-        client_samples = get_client_data(client_id)
-        train_loader, val_loader, test_loader = get_dataloaders(batch_size=16, train_samples=client_samples)
-        
-        client_model = BrainTumorVGG16()
-        client = BrainTumorClient(client_model, train_loader, val_loader, test_loader)
-        
-        updated_params, num_samples, metrics = client.fit(global_params, {})
-        
-        client_weights.append(updated_params)
-        client_lens.append(num_samples)
-        
-        # Nettoyage mémoire après chaque client
-        del client, client_model, train_loader, val_loader, test_loader
-        torch.cuda.empty_cache()
-        gc.collect()
+    # ── Paramètres ────────────────────────────────────────────────────────────
 
-    # 3. Agrégation FedAvg (Moyenne pondérée des poids)
-    print("  -> Aggregating weights (FedAvg)...")
-    total_samples = sum(client_lens)
-    new_global_params = []
-    
-    for layer_idx in range(len(client_weights[0])):
-        layer_avg = sum(client_weights[c][layer_idx] * client_lens[c] for c in range(NUM_CLIENTS)) / total_samples
-        new_global_params.append(layer_avg)
-        
-    # Mettre à jour le modèle global temporairement pour l'évaluation
-    new_state_dict = {}
-    for (k, v), param in zip(global_model.state_dict().items(), new_global_params):
-        new_state_dict[k] = torch.tensor(param).to(device)
-    global_model.load_state_dict(new_state_dict)
+    def get_parameters(self, config):
+        """Retourne les paramètres du modèle en tant que liste de tableaux NumPy."""
+        return [
+            val.detach().cpu().numpy().copy()   # .copy() évite le partage mémoire
+            for val in self.model.state_dict().values()
+        ]
 
-    # 4. Évaluation du modèle global agrégé sur les jeux de test de tous les clients
-    print("  -> Evaluating Global Model...")
-    total_test_samples = 0
-    weighted_loss = 0.0
-    weighted_accuracy = 0.0
+    def set_parameters(self, parameters):
+        """Charge les paramètres envoyés par le serveur dans le modèle local."""
+        state_dict = OrderedDict(
+            (key, torch.as_tensor(value, device=self.device))
+            for key, value in zip(self.model.state_dict().keys(), parameters)
+        )
+        self.model.load_state_dict(state_dict, strict=True)
 
-    for client_id in range(1, NUM_CLIENTS + 1):
-        client_samples = get_client_data(client_id)
-        _, _, test_loader = get_dataloaders(batch_size=16, train_samples=client_samples)
-        
-        client_model = BrainTumorVGG16()
-        # On passe test_loader au client pour l'évaluation
-        client = BrainTumorClient(client_model, None, None, test_loader)
-        
-        loss, num_test_samples, eval_metrics = client.evaluate(new_global_params, {})
-        
-        weighted_loss += loss * num_test_samples
-        weighted_accuracy += eval_metrics["accuracy"] * num_test_samples
-        total_test_samples += num_test_samples
-        
-        del client, client_model, test_loader
-        torch.cuda.empty_cache()
-        gc.collect()
+    # ── Entraînement ──────────────────────────────────────────────────────────
 
-    # Calcul des métriques globales (Moyenne pondérée)
-    global_loss = weighted_loss / total_test_samples
-    global_accuracy = weighted_accuracy / total_test_samples
-    
-    print(f">>> [ROUND {round_idx + 1} RESULT] Global Loss: {global_loss:.4f} | Global Accuracy: {global_accuracy * 100:.2f}%")
+    def fit(self, parameters, config):
+        """Entraînement local sur les données de l'hôpital."""
+        self.set_parameters(parameters)
+        self.model.train()
 
-print("\nFederated Learning Simulation Finished Successfully with Full Evaluation!")
+        trainable_params = [
+            p for p in self.model.parameters() if p.requires_grad
+        ]
+        if not trainable_params:
+            raise RuntimeError("Aucun paramètre entraînable dans le modèle.")
+
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(trainable_params, lr=LEARNING_RATE)
+
+        total_loss = 0.0
+        num_batches = 0
+
+        try:
+            for _ in range(LOCAL_EPOCHS):
+                for images, labels in self.train_loader:
+                    images = images.to(self.device, non_blocking=True)
+                    labels = labels.to(self.device, non_blocking=True)
+
+                    optimizer.zero_grad(set_to_none=True)
+
+                    # torch.amp.autocast remplace l'API dépréciée torch.cuda.amp.autocast
+                    with torch.amp.autocast("cuda", enabled=self.use_amp):
+                        outputs = self.model(images)
+                        loss = criterion(outputs, labels)
+
+                    if self.use_amp:
+                        self.scaler.scale(loss).backward()
+                        self.scaler.step(optimizer)
+                        self.scaler.update()
+                    else:
+                        loss.backward()
+                        optimizer.step()
+
+                    total_loss += loss.item()
+                    num_batches += 1
+
+            avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+            num_examples = len(self.train_loader.dataset)
+
+            return (
+                self.get_parameters({}),
+                num_examples,
+                {"train_loss": float(avg_loss)},   # métriques visibles côté serveur
+            )
+
+        finally:
+            # Nettoyage explicite pour éviter les OOM entre les rounds
+            del optimizer, criterion
+            if self.device.type == "cuda":
+                torch.cuda.empty_cache()
+            gc.collect()
+
+    # ── Évaluation ────────────────────────────────────────────────────────────
+
+    def evaluate(self, parameters, config):
+        """Évalue le modèle global sur le jeu de test local."""
+        if self.test_loader is None:
+            raise ValueError("test_loader est requis pour l'évaluation.")
+
+        self.set_parameters(parameters)
+        self.model.eval()
+
+        # reduction="sum" permet d'accumuler la loss sur tous les exemples
+        # puis de diviser une seule fois — plus précis que la moyenne de moyennes.
+        criterion = nn.CrossEntropyLoss(reduction="sum")
+        total_loss = 0.0
+        total_correct = 0
+        total_examples = 0
+
+        # inference_mode est plus rapide que no_grad (pas de version graph)
+        with torch.inference_mode():
+            for images, labels in self.test_loader:
+                images = images.to(self.device, non_blocking=True)
+                labels = labels.to(self.device, non_blocking=True)
+
+                outputs = self.model(images)
+                total_loss += criterion(outputs, labels).item()
+                total_correct += (outputs.argmax(dim=1) == labels).sum().item()
+                total_examples += labels.size(0)
+
+        if total_examples == 0:
+            raise ValueError("Le jeu de test est vide.")
+
+        avg_loss = total_loss / total_examples
+        accuracy = total_correct / total_examples
+
+        return float(avg_loss), total_examples, {"accuracy": float(accuracy)}
+
+
+# ── Point d'entrée ────────────────────────────────────────────────────────────
+
+def main():
+    client_id = int(os.getenv("CLIENT_ID", "1"))
+    print(f"Démarrage du client Flower {client_id}...")
+
+    model = BrainTumorVGG16()
+
+    print(f"Chargement des données du client {client_id}...")
+    client_samples = get_client_data(client_id)
+    train_loader, val_loader, test_loader = get_dataloaders(
+        batch_size=BATCH_SIZE,
+        train_samples=client_samples,
+    )
+
+    client = BrainTumorClient(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        test_loader=test_loader,
+    )
+
+    # Remplacer 0.0.0.0 par 127.0.0.1 pour la connexion client locale
+    server_address = SERVER_ADDRESS
+    if server_address.startswith("0.0.0.0"):
+        server_address = server_address.replace("0.0.0.0", "127.0.0.1", 1)
+
+    print(f"Connexion au serveur Flower : {server_address}")
+
+    # start_numpy_client est déprécié depuis Flower 1.0 — utiliser start_client + to_client()
+    fl.client.start_client(
+        server_address=server_address,
+        client=client.to_client(),
+    )
+
+
+if __name__ == "__main__":
+    main()
