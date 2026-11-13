@@ -14,125 +14,199 @@ Fonctionnement du client (`BrainTumorClient`) :
 5. Connexion réseau (`main`) : Lit la variable d'environnement `CLIENT_ID` et se connecte au serveur Flower via gRPC.
 """
 
-# %%writefile federated/client.py
-
+import gc
 import os
-import gc  # Ajouté pour vider la RAM Python
+from collections import OrderedDict
+
+import flwr as fl
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from collections import OrderedDict
-import flwr as fl
 
-# Import d l-modèle
-model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+from data.split_data import get_client_data, get_dataloaders
+from federated.flower_config import (
+    BATCH_SIZE,
+    LEARNING_RATE,
+    LOCAL_EPOCHS,
+    SERVER_ADDRESS,
+)
 from model.vgg16_model import BrainTumorVGG16
 
-# Import s-sahiḥ mn data/split_data.py (kansta3mlo get_client_data w get_dataloaders)
-from data.split_data import get_client_data, get_dataloaders
-from federated.flower_config import BATCH_SIZE, SERVER_ADDRESS,LEARNING_RATE
 
 class BrainTumorClient(fl.client.NumPyClient):
-    def __init__(self, model, train_loader, val_loader, test_loader, num_classes=4):
-        self.model = model
+    def __init__(
+        self,
+        model,
+        train_loader,
+        val_loader=None,
+        test_loader=None,
+    ):
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
+        self.model = model.to(self.device)
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.test_loader = test_loader
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model.to(self.device)
-        
-        # Training ghir 3la l-classifier layer bach n-hebtou communication cost
+
+        # Geler les couches convolutives — seuls les poids du classifieur
+        # sont échangés avec le serveur, ce qui réduit le coût de communication.
         for param in self.model.features.parameters():
             param.requires_grad = False
 
+        # AMP : accélère l'entraînement sur GPU et réduit l'utilisation VRAM.
+        # Utilise l'API non dépréciée (PyTorch >= 2.0).
+        self.use_amp = self.device.type == "cuda"
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
+
+    # ── Paramètres ────────────────────────────────────────────────────────────
+
     def get_parameters(self, config):
-        # Kan-t-akdo bli kol weight t-convertar l numpy array b njaḥ
-        return [val.detach().cpu().numpy() for _, val in self.model.state_dict().items()]
+        """Retourne les paramètres du modèle en tant que liste de tableaux NumPy."""
+        return [
+            val.detach().cpu().numpy().copy()   # .copy() évite le partage mémoire
+            for val in self.model.state_dict().values()
+        ]
 
     def set_parameters(self, parameters):
-        params_dict = zip(self.model.state_dict().keys(), parameters)
-        state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
+        """Charge les paramètres envoyés par le serveur dans le modèle local."""
+        state_dict = OrderedDict(
+            (key, torch.as_tensor(value, device=self.device))
+            for key, value in zip(self.model.state_dict().keys(), parameters)
+        )
         self.model.load_state_dict(state_dict, strict=True)
 
+    # ── Entraînement ──────────────────────────────────────────────────────────
+
     def fit(self, parameters, config):
+        """Entraînement local sur les données de l'hôpital."""
+        self.set_parameters(parameters)
+        self.model.train()
+
+        trainable_params = [
+            p for p in self.model.parameters() if p.requires_grad
+        ]
+        if not trainable_params:
+            raise RuntimeError("Aucun paramètre entraînable dans le modèle.")
+
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(trainable_params, lr=LEARNING_RATE)
+
+        total_loss = 0.0
+        num_batches = 0
+
         try:
-            self.set_parameters(parameters)
-            self.model.train()
-            criterion = nn.CrossEntropyLoss()
-            optimizer = optim.Adam(filter(lambda p: p.requires_grad, self.model.parameters()), lr=LEARNING_RATE)
-
-            # Local training epochs
-            for epoch in range(1):
+            for _ in range(LOCAL_EPOCHS):
                 for images, labels in self.train_loader:
-                    images, labels = images.to(self.device), labels.to(self.device)
-                    optimizer.zero_grad()
-                    outputs = self.model(images)
-                    loss = criterion(outputs, labels)
-                    loss.backward()
-                    optimizer.step()
+                    images = images.to(self.device, non_blocking=True)
+                    labels = labels.to(self.device, non_blocking=True)
 
-            # ==========================================================
-            # VIDAGE DE LA MÉMOIRE (GPU VRAM & RAM CPU) POUR ÉVITER OOM
-            # ==========================================================
-            torch.cuda.empty_cache()
+                    optimizer.zero_grad(set_to_none=True)
+
+                    # torch.amp.autocast remplace l'API dépréciée torch.cuda.amp.autocast
+                    with torch.amp.autocast("cuda", enabled=self.use_amp):
+                        outputs = self.model(images)
+                        loss = criterion(outputs, labels)
+
+                    if self.use_amp:
+                        self.scaler.scale(loss).backward()
+                        self.scaler.step(optimizer)
+                        self.scaler.update()
+                    else:
+                        loss.backward()
+                        optimizer.step()
+
+                    total_loss += loss.item()
+                    num_batches += 1
+
+            avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+            num_examples = len(self.train_loader.dataset)
+
+            return (
+                self.get_parameters({}),
+                num_examples,
+                {"train_loss": float(avg_loss)},   # métriques visibles côté serveur
+            )
+
+        finally:
+            # Nettoyage explicite pour éviter les OOM entre les rounds
+            del optimizer, criterion
+            if self.device.type == "cuda":
+                torch.cuda.empty_cache()
             gc.collect()
 
-            return self.get_parameters(config={}), len(self.train_loader.dataset), {}
-            
-        except Exception as e:
-            print(f"\n[CRITICAL ERROR IN FIT]: {e}")
-            import traceback
-            traceback.print_exc()
-            raise e
+    # ── Évaluation ────────────────────────────────────────────────────────────
 
     def evaluate(self, parameters, config):
+        """Évalue le modèle global sur le jeu de test local."""
+        if self.test_loader is None:
+            raise ValueError("test_loader est requis pour l'évaluation.")
+
         self.set_parameters(parameters)
         self.model.eval()
-        criterion = nn.CrossEntropyLoss()
-        loss = 0.0
-        correct = 0
-        total = 0
 
-        with torch.no_grad():
+        # reduction="sum" permet d'accumuler la loss sur tous les exemples
+        # puis de diviser une seule fois — plus précis que la moyenne de moyennes.
+        criterion = nn.CrossEntropyLoss(reduction="sum")
+        total_loss = 0.0
+        total_correct = 0
+        total_examples = 0
+
+        # inference_mode est plus rapide que no_grad (pas de version graph)
+        with torch.inference_mode():
             for images, labels in self.test_loader:
-                images, labels = images.to(self.device), labels.to(self.device)
-                outputs = self.model(images)
-                # Ligne corrigée ici :
-                loss += criterion(outputs, labels).item() * images.size(0)
-                _, predicted = torch.max(outputs.data, 1)
-                total += labels.size(0)
-                correct += (predicted == labels).sum().item()
+                images = images.to(self.device, non_blocking=True)
+                labels = labels.to(self.device, non_blocking=True)
 
-        loss = loss / total
-        accuracy = correct / total
-        return float(loss), total, {"accuracy": float(accuracy)}
+                outputs = self.model(images)
+                total_loss += criterion(outputs, labels).item()
+                total_correct += (outputs.argmax(dim=1) == labels).sum().item()
+                total_examples += labels.size(0)
+
+        if total_examples == 0:
+            raise ValueError("Le jeu de test est vide.")
+
+        avg_loss = total_loss / total_examples
+        accuracy = total_correct / total_examples
+
+        return float(avg_loss), total_examples, {"accuracy": float(accuracy)}
+
+
+# ── Point d'entrée ────────────────────────────────────────────────────────────
 
 def main():
-    # Récupérer l'ID d'client mn l-environment variable (default 1)
     client_id = int(os.getenv("CLIENT_ID", "1"))
-    print(f"Starting Flower client ID: {client_id}...")
+    print(f"Démarrage du client Flower {client_id}...")
 
-    # Chargement d l-modèle
     model = BrainTumorVGG16()
 
-    # Jbdna les samples dyal had l-client b get_client_data(client_id)
-    print(f"Loading data samples for client {client_id}...")
+    print(f"Chargement des données du client {client_id}...")
     client_samples = get_client_data(client_id)
+    train_loader, val_loader, test_loader = get_dataloaders(
+        batch_size=BATCH_SIZE,
+        train_samples=client_samples,
+    )
 
-    # 3eytna l get_dataloaders bach t-creer lina train_loader, val_loader, w test_loader dyal had l-client
-    train_loader, val_loader, test_loader = get_dataloaders(batch_size=BATCH_SIZE, train_samples=client_samples)
+    client = BrainTumorClient(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        test_loader=test_loader,
+    )
 
-    # Initialisation d l-client dyalna
-    client = BrainTumorClient(model, train_loader, val_loader, test_loader)
+    # Remplacer 0.0.0.0 par 127.0.0.1 pour la connexion client locale
+    server_address = SERVER_ADDRESS
+    if server_address.startswith("0.0.0.0"):
+        server_address = server_address.replace("0.0.0.0", "127.0.0.1", 1)
 
-    try:
-        print(f"Connecting client {client_id} to server at 127.0.0.1:8080...")
-        fl.client.start_numpy_client(
-            server_address=SERVER_ADDRESS,
-            client=client,
-        )
-    except Exception as e:
-        print(f"[ERROR] Client failed: {e}")
+    print(f"Connexion au serveur Flower : {server_address}")
+
+    # start_numpy_client est déprécié depuis Flower 1.0 — utiliser start_client + to_client()
+    fl.client.start_client(
+        server_address=server_address,
+        client=client.to_client(),
+    )
+
 
 if __name__ == "__main__":
     main()

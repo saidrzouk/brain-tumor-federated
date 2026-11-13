@@ -22,8 +22,8 @@ NUM_CLIENTS = 3
 
 # Tolérance aux pannes
 MIN_FIT_CLIENTS = 3
-MIN_EVALUATE_CLIENTS = 3
-MIN_AVAILABLE_CLIENTS = 3
+MIN_EVALUATE_CLIENTS = 2
+MIN_AVAILABLE_CLIENTS = 2
 
 # Hyperparamètres d'entraînement local (Client)
 LOCAL_EPOCHS = 3
