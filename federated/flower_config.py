@@ -14,7 +14,16 @@ Fonctionnement du cycle (10 rounds au total) :
 """
 
 # Paramètres Réseau
-SERVER_ADDRESS = "127.0.0.1:8080"
+#SERVER_ADDRESS = "127.0.0.1:8080"
+
+
+import os
+
+# Paramètres Réseau
+# Surchargeable par variable d'environnement (utilisé par Docker :
+# 0.0.0.0:8080 côté serveur, server:8080 côté clients).
+SERVER_ADDRESS = os.getenv("SERVER_ADDRESS", "127.0.0.1:8080")
+
 
 # Paramètres des Cycles Fédérés
 NUM_ROUNDS = 10
