@@ -1,0 +1,28 @@
+# Keep the build context small: code only, no data, weights or results.
+.git
+.gitignore
+.venv
+venv
+env
+.env
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.ipynb_checkpoints
+
+# Mounted as volumes at run time (see docker-compose.yml)
+data/raw
+model/saved_models
+
+# Generated artifacts
+experiments/results
+report
+*.pth
+*.pt
+*.h5
+*.zip
+kaggle.json
+.DS_Store
+Thumbs.db

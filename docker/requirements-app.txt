@@ -1,0 +1,6 @@
+# torch and torchvision are installed separately (CPU wheels) in the Dockerfile.
+gradio>=4.0,<7
+numpy>=1.26,<3
+Pillow>=10,<12
+# data/split_data.py imports scikit-learn at module level
+scikit-learn>=1.4,<2

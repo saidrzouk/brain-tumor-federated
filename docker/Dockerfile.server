@@ -1,0 +1,27 @@
+# Flower server (FedAvg aggregation). Lightweight: no PyTorch needed.
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# Dependencies first so this layer is cached when only the code changes.
+COPY docker/requirements-server.txt .
+RUN pip install -r requirements-server.txt
+
+COPY federated/ ./federated/
+COPY docker/healthcheck.py ./healthcheck.py
+
+RUN useradd --create-home --uid 1000 appuser
+USER appuser
+
+# The server must listen on all interfaces so other containers can reach it.
+ENV SERVER_ADDRESS=0.0.0.0:8080
+EXPOSE 8080
+
+HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=10 \
+    CMD ["python", "/app/healthcheck.py"]
+
+CMD ["python", "-m", "federated.server"]
