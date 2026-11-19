@@ -68,6 +68,48 @@ a trained model in `model/saved_models/` (mounted into the container).
 - Port 8080 is also published on your machine, so a client running outside
   Docker can connect to `localhost:8080`.
 
+## Memory requirements (important)
+
+Training VGG16 on CPU is memory hungry, and the 3 clients train **at the same
+time**. Measured on a 16 GB Windows laptop with Docker Desktop (WSL2):
+
+| Container | Memory seen |
+|-----------|-------------|
+| each client | about 2.3 GB at the start of training, **3.5 GB** when the kernel killed one |
+| server | about 1.9 GB |
+
+So the 4 containers need roughly **12.5 GB or more** for Docker alone. With
+Docker limited to about 10 GB, one client was killed by the kernel
+(`Out of memory: Killed process ... python` in `dmesg`) and restarted, and
+the round could not complete with 3 clients.
+
+Recommendations:
+
+- Run the full 3-client training on a machine with **24 GB of RAM or more**
+  (or give Docker at least 14 GB), or on Colab.
+- On Windows (WSL2), the Docker memory limit is set in
+  `C:\Users\<you>\.wslconfig`:
+
+  ```ini
+  [wsl2]
+  memory=14GB
+  swap=8GB
+  ```
+
+  then run `wsl --shutdown` and restart Docker Desktop. Check the limit with
+  `docker run --rm alpine free -m`.
+- On a smaller machine, use `python federated/run_simulation.py`, which trains
+  the clients one after another instead of in parallel.
+
+How to recognise the problem: a container shows `Exited (137)` or restarts in
+`docker compose ps -a`, and the server log stops after `configure_fit`.
+`docker inspect <container> --format "{{.State.OOMKilled}}"` may print
+`false` even then, because the whole Docker VM ran out of memory. To confirm:
+
+```bash
+wsl -d docker-desktop dmesg | findstr /i "oom killed"
+```
+
 ## Changing the number of clients
 
 Add or remove `clientN` services in `docker-compose.yml`, and keep these in
@@ -80,8 +122,8 @@ clients before starting.
 - **`FileNotFoundError ... data/raw/glioma`**: the dataset is missing. Run
   `python data/download_dataset.py` on the host and check that `data/raw/`
   contains the four class folders.
-- **Containers killed or very slow**: VGG16 on CPU is heavy. Give Docker
-  Desktop more memory (Settings, Resources) or run fewer clients.
+- **Containers killed, restarting or very slow**: see "Memory requirements"
+  above. VGG16 on CPU is heavy and the 3 clients train in parallel.
 - **Clients keep restarting**: look at `docker compose logs client1`. Clients
   retry up to 3 times if they fail.
 - **GPU**: the images are CPU-only. A CUDA build needs a different
