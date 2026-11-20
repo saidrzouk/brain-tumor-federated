@@ -3,16 +3,16 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=10
 
 WORKDIR /app
 
 # Dependencies first so this layer is cached when only the code changes.
-COPY docker/requirements-server.txt .
-RUN pip install -r requirements-server.txt
+RUN pip install "flwr>=1.8,<2" "numpy>=1.26,<3"
 
 COPY federated/ ./federated/
-COPY docker/healthcheck.py ./healthcheck.py
 
 RUN useradd --create-home --uid 1000 appuser
 USER appuser
@@ -21,7 +21,9 @@ USER appuser
 ENV SERVER_ADDRESS=0.0.0.0:8080
 EXPOSE 8080
 
+# Healthy once the server accepts TCP connections on its port. The hospitals
+# wait for this (depends_on: condition: service_healthy in docker-compose.yml).
 HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=10 \
-    CMD ["python", "/app/healthcheck.py"]
+    CMD python -c "import os, socket; socket.create_connection(('127.0.0.1', int(os.environ['SERVER_ADDRESS'].rsplit(':', 1)[1])), 2).close()"
 
 CMD ["python", "-m", "federated.server"]

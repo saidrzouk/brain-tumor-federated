@@ -1,16 +1,20 @@
 name: brain-tumor-federated
 
-# One Flower server + three clients (one per hospital).
+# 1 Flower server + 3 hospitals (federated clients) + the Gradio web app,
+# all on the shared bridge network fl_network.
 # Start everything:  docker compose up --build
-# The MRI images must be in ./data/raw (see docker/README.md).
+# The MRI images must be in ./data/raw (see README.md, section Docker).
 
-x-client: &client
+x-hospital: &hospital
   build:
     context: .
     dockerfile: docker/Dockerfile.client
   image: brain-tumor-federated-client
+  networks:
+    - fl_network
   volumes:
     - ./data/raw:/app/data/raw:ro
+  # Hospitals wait until the server accepts connections.
   depends_on:
     server:
       condition: service_healthy
@@ -26,29 +30,30 @@ services:
       SERVER_ADDRESS: 0.0.0.0:8080
     ports:
       - "8080:8080"
+    networks:
+      - fl_network
 
-  client1:
-    <<: *client
+  hospital_1:
+    <<: *hospital
     environment:
       CLIENT_ID: "1"
       SERVER_ADDRESS: server:8080
 
-  client2:
-    <<: *client
+  hospital_2:
+    <<: *hospital
     environment:
       CLIENT_ID: "2"
       SERVER_ADDRESS: server:8080
 
-  client3:
-    <<: *client
+  hospital_3:
+    <<: *hospital
     environment:
       CLIENT_ID: "3"
       SERVER_ADDRESS: server:8080
 
-  # Optional Gradio app, not started by default.
-  # Run with:  docker compose --profile app up --build app
-  app:
-    profiles: ["app"]
+  # Gradio web app. Needs the app/ folder (app/app.py) and a trained model in
+  # model/saved_models/ (mounted read-only).
+  webapp:
     build:
       context: .
       dockerfile: docker/Dockerfile.app
@@ -57,3 +62,9 @@ services:
       - "7860:7860"
     volumes:
       - ./model/saved_models:/app/model/saved_models:ro
+    networks:
+      - fl_network
+
+networks:
+  fl_network:
+    driver: bridge
