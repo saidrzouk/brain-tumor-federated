@@ -13,7 +13,9 @@ Fonctionnement du serveur :
 """
 
 import flwr as fl
-from federated.flower_config import NUM_ROUNDS, MIN_FIT_CLIENTS, SERVER_ADDRESS
+from federated.flower_config import (
+    NUM_ROUNDS, MIN_FIT_CLIENTS, MIN_EVALUATE_CLIENTS, MIN_AVAILABLE_CLIENTS, SERVER_ADDRESS,
+)
 
 # Fonction pour calculer la moyenne pondérée de l'accuracy des clients
 def weighted_average(metrics):
@@ -25,7 +27,8 @@ def main():
     # Stratégie FedAvg avec agrégation de l'accuracy et tolérance aux pannes
     strategy = fl.server.strategy.FedAvg(
         min_fit_clients=MIN_FIT_CLIENTS,
-        min_available_clients=MIN_FIT_CLIENTS,
+        min_evaluate_clients=MIN_EVALUATE_CLIENTS,
+        min_available_clients=MIN_AVAILABLE_CLIENTS,
         evaluate_metrics_aggregation_fn=weighted_average,
     )
     
