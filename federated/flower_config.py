@@ -13,10 +13,6 @@ Fonctionnement du cycle (10 rounds au total) :
 6. Le problème comporte 4 classes de tumeurs cérébrales.
 """
 
-# Paramètres Réseau
-#SERVER_ADDRESS = "127.0.0.1:8080"
-
-
 import os
 
 # Paramètres Réseau
@@ -24,13 +20,12 @@ import os
 # 0.0.0.0:8080 côté serveur, server:8080 côté clients).
 SERVER_ADDRESS = os.getenv("SERVER_ADDRESS", "127.0.0.1:8080")
 
-
 # Paramètres des Cycles Fédérés
 NUM_ROUNDS = 10
 NUM_CLIENTS = 3
 
 # Tolérance aux pannes
-MIN_FIT_CLIENTS = 3
+MIN_FIT_CLIENTS = 2
 MIN_EVALUATE_CLIENTS = 2
 MIN_AVAILABLE_CLIENTS = 2
 
