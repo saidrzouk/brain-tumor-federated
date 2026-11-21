@@ -137,8 +137,11 @@ even then, because the whole Docker VM ran out of memory. To confirm:
 ### Changing the number of hospitals
 
 Add or remove `hospital_N` services in `docker-compose.yml`, and keep these in
-sync: `NUM_CLIENTS` / `MIN_FIT_CLIENTS` in `federated/flower_config.py` and
-`N_CLIENTS` in `data/split_data.py`.
+sync: `NUM_CLIENTS` in `federated/flower_config.py` and `N_CLIENTS` in
+`data/split_data.py`. `MIN_FIT_CLIENTS`, `MIN_EVALUATE_CLIENTS` and
+`MIN_AVAILABLE_CLIENTS` (2 by default) are the minimum number of hospitals the
+server needs: with 2 out of 3, training continues when one hospital stops
+(`docker compose stop hospital_2`), and the hospital can rejoin later.
 
 ### Troubleshooting
 
