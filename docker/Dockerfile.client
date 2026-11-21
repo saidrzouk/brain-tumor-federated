@@ -1,0 +1,34 @@
+# Flower client: one container per hospital (selected with CLIENT_ID).
+# CPU-only PyTorch by default. Override TORCH_INDEX_URL for a CUDA build, e.g.
+#   docker compose build --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
+FROM python:3.11-slim
+
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=10 \
+    TORCH_HOME=/opt/torch
+
+WORKDIR /app
+
+# Dependencies first so these layers are cached when only the code changes.
+RUN pip install "torch>=2.2,<3" "torchvision>=0.17,<1" --index-url ${TORCH_INDEX_URL}
+RUN pip install "flwr>=1.8,<2" "numpy>=1.26,<3" "Pillow>=10,<12" "scikit-learn>=1.4,<2"
+
+# Bake the ImageNet VGG16 weights (~528 MB) into the image, so the clients
+# do not each download them at start-up.
+RUN python -c "from torchvision import models; models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)"
+
+# Code only. The MRI images (data/raw) are mounted at run time, see .dockerignore.
+COPY data/ ./data/
+COPY model/ ./model/
+COPY federated/ ./federated/
+
+RUN useradd --create-home --uid 1000 appuser
+USER appuser
+
+# Set by docker-compose: CLIENT_ID (1..3) and SERVER_ADDRESS (server:8080).
+CMD ["python", "-m", "federated.client"]
