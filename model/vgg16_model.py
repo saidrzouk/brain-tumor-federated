@@ -13,7 +13,12 @@ class BrainTumorVGG16(nn.Module):
         super().__init__()
         weights = models.VGG16_Weights.IMAGENET1K_V1 if pretrained else None
         base = models.vgg16(weights=weights)
-        base.classifier[6] = nn.Linear(4096, NUM_CLASSES)
+        base.classifier = nn.Sequential(
+            nn.Linear(512 * 7 * 7, 256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, NUM_CLASSES),
+        )
         self.features = base.features
         self.avgpool = base.avgpool
         self.classifier = base.classifier
